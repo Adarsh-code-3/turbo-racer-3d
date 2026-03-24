@@ -7,19 +7,23 @@ import StartScreen from './StartScreen'
 import GameOverScreen from './GameOverScreen'
 
 export default function Game() {
-  const [gameState, setGameState] = useState('start') // start, countdown, playing, gameover
+  const [gameState, setGameState] = useState('start')
   const [score, setScore] = useState(0)
   const [speed, setSpeed] = useState(0)
   const [highScore, setHighScore] = useState(0)
   const [countdown, setCountdown] = useState(3)
   const [tiltEnabled, setTiltEnabled] = useState(false)
-  const [tiltX, setTiltX] = useState(0)
-  const [touchX, setTouchX] = useState(0)
+  const [steerInput, setSteerInput] = useState(0)
   const [combo, setCombo] = useState(0)
   const [nitro, setNitro] = useState(0)
   const [nitroActive, setNitroActive] = useState(false)
-  const [lane, setLane] = useState(0)
   const [showNitroFlash, setShowNitroFlash] = useState(false)
+
+  const touchStartRef = useRef(null)
+  const gameStateRef = useRef('start')
+  const nitroRef = useRef(0)
+  gameStateRef.current = gameState
+  nitroRef.current = nitro
 
   useEffect(() => {
     const stored = localStorage.getItem('turbo-racer-highscore')
@@ -36,7 +40,7 @@ export default function Game() {
           return true
         }
       } catch (e) {
-        console.warn('Tilt permission denied')
+        // fallback to touch
       }
     } else if (typeof DeviceOrientationEvent !== 'undefined') {
       setTiltEnabled(true)
@@ -47,71 +51,86 @@ export default function Game() {
 
   useEffect(() => {
     if (!tiltEnabled) return
-
+    let lastGamma = 0
     const handleOrientation = (e) => {
-      if (gameState !== 'playing') return
+      if (gameStateRef.current !== 'playing') return
       const gamma = e.gamma || 0
-      const normalized = Math.max(-1, Math.min(1, gamma / 30))
-      setTiltX(normalized)
+      lastGamma = lastGamma * 0.5 + gamma * 0.5
+      const normalized = Math.max(-1, Math.min(1, lastGamma / 25))
+      setSteerInput(normalized)
     }
-
     window.addEventListener('deviceorientation', handleOrientation, true)
     return () => window.removeEventListener('deviceorientation', handleOrientation, true)
-  }, [tiltEnabled, gameState])
+  }, [tiltEnabled])
 
   useEffect(() => {
-    const handleTouch = (e) => {
-      if (gameState !== 'playing') return
+    const handleTouchStart = (e) => {
+      if (gameStateRef.current !== 'playing') return
+      const touch = e.touches[0]
+      if (!touch) return
+      touchStartRef.current = touch.clientX
+      const halfW = window.innerWidth / 2
+      setSteerInput((touch.clientX - halfW) / halfW)
+    }
+    const handleTouchMove = (e) => {
+      if (gameStateRef.current !== 'playing') return
       e.preventDefault()
       const touch = e.touches[0]
       if (!touch) return
-      const screenX = touch.clientX
-      const halfWidth = window.innerWidth / 2
-      const normalized = (screenX - halfWidth) / halfWidth
-      setTouchX(normalized)
+      const halfW = window.innerWidth / 2
+      setSteerInput((touch.clientX - halfW) / halfW)
     }
-
     const handleTouchEnd = () => {
-      setTouchX(0)
+      if (gameStateRef.current !== 'playing') return
+      touchStartRef.current = null
+      setSteerInput(0)
     }
-
-    window.addEventListener('touchmove', handleTouch, { passive: false })
-    window.addEventListener('touchend', handleTouchEnd)
+    window.addEventListener('touchstart', handleTouchStart, { passive: true })
+    window.addEventListener('touchmove', handleTouchMove, { passive: false })
+    window.addEventListener('touchend', handleTouchEnd, { passive: true })
     return () => {
-      window.removeEventListener('touchmove', handleTouch)
+      window.removeEventListener('touchstart', handleTouchStart)
+      window.removeEventListener('touchmove', handleTouchMove)
       window.removeEventListener('touchend', handleTouchEnd)
     }
-  }, [gameState])
+  }, [])
 
   useEffect(() => {
-    const handleKey = (e) => {
-      if (gameState !== 'playing') return
-      if (e.key === 'ArrowLeft' || e.key === 'a') setTouchX(-0.8)
-      if (e.key === 'ArrowRight' || e.key === 'd') setTouchX(0.8)
-      if (e.key === ' ' || e.key === 'Shift') activateNitro()
+    const keys = new Set()
+    const handleKeyDown = (e) => {
+      if (gameStateRef.current !== 'playing') return
+      keys.add(e.key)
+      if (e.key === 'ArrowLeft' || e.key === 'a') setSteerInput(-0.85)
+      if (e.key === 'ArrowRight' || e.key === 'd') setSteerInput(0.85)
+      if (e.key === ' ' || e.key === 'Shift') activateNitroFn()
     }
     const handleKeyUp = (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'ArrowRight' || e.key === 'd') {
-        setTouchX(0)
+      keys.delete(e.key)
+      if (['ArrowLeft', 'a', 'ArrowRight', 'd'].includes(e.key)) {
+        const hasLeft = keys.has('ArrowLeft') || keys.has('a')
+        const hasRight = keys.has('ArrowRight') || keys.has('d')
+        if (!hasLeft && !hasRight) setSteerInput(0)
+        else if (hasLeft) setSteerInput(-0.85)
+        else setSteerInput(0.85)
       }
     }
-    window.addEventListener('keydown', handleKey)
+    window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
     return () => {
-      window.removeEventListener('keydown', handleKey)
+      window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [gameState, nitro])
+  }, [])
 
-  const activateNitro = useCallback(() => {
-    if (nitro >= 30) {
+  const activateNitroFn = useCallback(() => {
+    if (nitroRef.current >= 30) {
       setNitroActive(true)
       setShowNitroFlash(true)
-      setTimeout(() => setShowNitroFlash(false), 300)
-      setTimeout(() => setNitroActive(false), 3000)
       setNitro(0)
+      setTimeout(() => setShowNitroFlash(false), 200)
+      setTimeout(() => setNitroActive(false), 3000)
     }
-  }, [nitro])
+  }, [])
 
   const startGame = useCallback(async () => {
     await requestTilt()
@@ -121,10 +140,8 @@ export default function Game() {
     setCombo(0)
     setNitro(0)
     setNitroActive(false)
+    setSteerInput(0)
     setCountdown(3)
-    setLane(0)
-    setTiltX(0)
-    setTouchX(0)
 
     let count = 3
     const interval = setInterval(() => {
@@ -134,46 +151,31 @@ export default function Game() {
         clearInterval(interval)
         setGameState('playing')
       }
-    }, 1000)
+    }, 800)
   }, [requestTilt])
 
   const handleGameOver = useCallback((finalScore) => {
     setGameState('gameover')
-    if (finalScore > highScore) {
-      setHighScore(finalScore)
-      localStorage.setItem('turbo-racer-highscore', finalScore.toString())
-    }
-  }, [highScore])
-
-  const handleScoreUpdate = useCallback((newScore) => {
-    setScore(newScore)
+    setHighScore(prev => {
+      if (finalScore > prev) {
+        localStorage.setItem('turbo-racer-highscore', finalScore.toString())
+        return finalScore
+      }
+      return prev
+    })
   }, [])
-
-  const handleSpeedUpdate = useCallback((newSpeed) => {
-    setSpeed(newSpeed)
-  }, [])
-
-  const handleComboUpdate = useCallback((newCombo) => {
-    setCombo(newCombo)
-  }, [])
-
-  const handleNitroUpdate = useCallback((newNitro) => {
-    setNitro(Math.min(100, newNitro))
-  }, [])
-
-  const steerInput = tiltEnabled ? tiltX : touchX
 
   return (
-    <div className="w-screen h-screen relative overflow-hidden bg-black">
+    <div className="w-screen h-screen relative overflow-hidden bg-black" style={{ touchAction: 'none' }}>
       <GameCanvas
         gameState={gameState}
         steerInput={steerInput}
         nitroActive={nitroActive}
         onGameOver={handleGameOver}
-        onScoreUpdate={handleScoreUpdate}
-        onSpeedUpdate={handleSpeedUpdate}
-        onComboUpdate={handleComboUpdate}
-        onNitroUpdate={handleNitroUpdate}
+        onScoreUpdate={setScore}
+        onSpeedUpdate={setSpeed}
+        onComboUpdate={setCombo}
+        onNitroUpdate={setNitro}
       />
 
       {gameState === 'start' && (
@@ -183,7 +185,8 @@ export default function Game() {
       {gameState === 'countdown' && (
         <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
           <div key={countdown} className="count-pulse">
-            <span className="text-[120px] sm:text-[180px] font-black text-white drop-shadow-[0_0_60px_rgba(139,92,246,0.8)]">
+            <span className="text-[80px] sm:text-[140px] font-black text-white"
+                  style={{ textShadow: '0 0 60px rgba(139,92,246,0.8), 0 0 120px rgba(139,92,246,0.4)' }}>
               {countdown > 0 ? countdown : 'GO'}
             </span>
           </div>
@@ -198,10 +201,10 @@ export default function Game() {
             combo={combo}
             nitro={nitro}
             nitroActive={nitroActive}
-            onNitroActivate={activateNitro}
+            onNitroActivate={activateNitroFn}
           />
           {showNitroFlash && (
-            <div className="absolute inset-0 z-20 pointer-events-none bg-violet-500/20 animate-pulse" />
+            <div className="absolute inset-0 z-20 pointer-events-none bg-violet-500/20" />
           )}
         </>
       )}
